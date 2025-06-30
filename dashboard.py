@@ -120,7 +120,9 @@ if query_button:
 # --- Display Table and Filters ---
 df = st.session_state.df_results
 if not df.empty:
-    st.success(f"✅ Found {len(df)} item(s)")
+    total_units_sold = int(df['total_quantity_sold'].sum())
+    st.success(f"✅ Found {len(df)} item(s), Total Units Sold: {total_units_sold}")
+
 
     # Filter UI
     with st.expander("🔍 Filter Results", expanded=True):
@@ -150,6 +152,8 @@ if not df.empty:
     ]
 
     if not df_filtered.empty:
+        csv = df_filtered.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download CSV", data=csv, file_name="filtered_sold_items.csv", mime='text/csv')
         # Pagination Setup
         items_per_page = 500
         total_pages = (len(df_filtered) - 1) // items_per_page + 1
@@ -166,8 +170,7 @@ if not df.empty:
                 st.markdown(f"[🔗 View Product Page](/?item_id={row['ebay_item_number']})")
 
         # CSV Download of currently filtered results
-        csv = df_filtered.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download CSV", data=csv, file_name="filtered_sold_items.csv", mime='text/csv')
+
     else:
         st.warning("⚠️ No items match the filters.")
 else:
