@@ -48,19 +48,6 @@ if not df.empty:
     # The Main Table
     st.dataframe(
         df,
-        column_config={
-            "image_url": st.column_config.ImageColumn("Image", width="small"),
-            "title": st.column_config.TextColumn("Product Name", width="large"),
-            "current_price": st.column_config.NumberColumn("Price", format="$%.2f"),
-            
-            # The Columns you specifically asked for
-            "sold_last_7_days": st.column_config.NumberColumn("7 Days", format="%d 📦"),
-            "sold_last_14_days": st.column_config.NumberColumn("14 Days", format="%d"),
-            "sold_last_30_days": st.column_config.NumberColumn("30 Days", format="%d"),
-            "total_sold_all_time": st.column_config.NumberColumn("Total Sold", format="%d"),
-            
-            "item_number": st.column_config.TextColumn("Item ID"),
-        },
         use_container_width=True,
         hide_index=True,
         height=900 
