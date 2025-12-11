@@ -27,13 +27,22 @@ except Exception as e:
 # --- Load Data from View ---
 # We just grab the view directly. No complex joins needed anymore.
 query = """
-    WITH product_stats AS (
-    -- This part replicates the VIEW logic
+    WITH latest_data AS (
+    -- 1. Get the most recent Price, Title, and Image for each item
+    -- DISTINCT ON ensures we grab exactly one row (the latest one) per item
+    SELECT DISTINCT ON (item_number)
+        item_number,
+        price,
+        title,
+        image_url
+    FROM sales_raw
+    ORDER BY item_number, sold_date DESC
+),
+
+sales_counts AS (
+    -- 2. Calculate the Sales Counts (aggregating all history)
     SELECT 
         item_number,
-        title,
-        MAX(image_url) as image_url,
-        MAX(price) as current_price,
         
         -- 7 Days
         SUM(CASE 
@@ -63,31 +72,31 @@ query = """
         COUNT(*) AS total_sold_all_time
 
     FROM sales_raw
-    GROUP BY item_number, title
+    GROUP BY item_number
 )
 
--- This part replicates your final SELECT logic
+-- 3. Join them together for the final result
 SELECT 
-    image_url,
-    title,
-    current_price,
-    sold_last_7_days,
-    sold_last_14_days,
-    sold_last_21_days,
-    sold_last_30_days,
-    total_sold_all_time,
-    item_number,
+    l.image_url,
+    l.title,
+    l.price AS current_price, -- This is now strictly the LATEST price
+    s.sold_last_7_days,
+    s.sold_last_14_days,
+    s.sold_last_21_days,
+    s.sold_last_30_days,
+    s.total_sold_all_time,
+    l.item_number,
     
     -- Window Functions for Grand Totals
-    SUM(total_sold_all_time) OVER() AS grand_total_sold,
-    SUM(sold_last_7_days) OVER() AS grand_total_sold_7_days,
-    SUM(sold_last_14_days) OVER() AS grand_total_sold_14_days,
-    SUM(sold_last_21_days) OVER() AS grand_total_sold_21_days,
-    SUM(sold_last_30_days) OVER() AS grand_total_sold_30_days
+    SUM(s.total_sold_all_time) OVER() AS grand_total_sold,
+    SUM(s.sold_last_7_days) OVER() AS grand_total_sold_7_days,
+    SUM(s.sold_last_14_days) OVER() AS grand_total_sold_14_days,
+    SUM(s.sold_last_21_days) OVER() AS grand_total_sold_21_days,
+    SUM(s.sold_last_30_days) OVER() AS grand_total_sold_30_days
 
-FROM product_stats
-ORDER BY sold_last_7_days DESC, item_number ASC; 
--- Note: I kept 'item_number ASC' here to prevent the "inconsistent data" issue you faced earlier.
+FROM sales_counts s
+JOIN latest_data l ON s.item_number = l.item_number
+ORDER BY s.sold_last_7_days DESC, l.item_number ASC;
 """
 
 # Run query
