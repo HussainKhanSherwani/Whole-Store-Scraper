@@ -43,7 +43,7 @@ query = """
         sum(sold_last_21_days) OVER() AS grand_total_sold_21_days,
         sum(sold_last_30_days) OVER() AS grand_total_sold_30_days
     FROM product_performance_view
-    ORDER BY sold_last_7_days DESC
+    ORDER BY sold_last_7_days DESC limit 10
 """
 
 # Run query
