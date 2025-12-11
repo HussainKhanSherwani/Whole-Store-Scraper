@@ -28,17 +28,9 @@ except Exception as e:
 # We just grab the view directly. No complex joins needed anymore.
 query = """
     SELECT 
-        image_url,
-        title,
-        current_price,
-        sold_last_7_days,
-        sold_last_14_days,
-        sold_last_30_days,
-        total_sold_all_time,
-        item_number
+        *
     FROM product_performance_view
     ORDER BY sold_last_7_days DESC
-    LIMIT 1000 -- Optional: Limit to top 1000 for speed
 """
 
 # Run query
