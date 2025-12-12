@@ -1,12 +1,35 @@
 import streamlit as st
 import psycopg2
 import pandas as pd
+from datetime import date, timedelta
 
 # --- UI Header ---
 st.set_page_config(page_title="eBay Dashboard", layout="wide")
 st.title("📦 eBay Sold Items Dashboard")
 
-# --- Database Connection ---
+# --- 1. Sidebar Controls (Date Range & Filters) ---
+with st.sidebar:
+    st.header("📅 Custom Date Range")
+    # Default to last 3 days
+    default_start = date.today() - timedelta(days=3)
+    default_end = date.today()
+    
+    start_date = st.date_input("Start Date", default_start)
+    end_date = st.date_input("End Date", default_end)
+    
+    st.divider()
+    st.header("🔍 Sales Filters (Min Sold)")
+    
+    # We create placeholders for sliders. We will update their max values 
+    # dynamically after we load the data.
+    min_7   = st.number_input("Min Sales (7 Days)", min_value=0, value=0)
+    min_14  = st.number_input("Min Sales (14 Days)", min_value=0, value=0)
+    min_21  = st.number_input("Min Sales (21 Days)", min_value=0, value=0)
+    min_30  = st.number_input("Min Sales (30 Days)", min_value=0, value=0)
+    min_custom = st.number_input(f"Min Sales ({start_date} to {end_date})", min_value=0, value=0)
+    min_total = st.number_input("Min Total Sold", min_value=0, value=0)
+
+# --- 2. Database Connection ---
 @st.cache_resource
 def get_connection():
     return psycopg2.connect(
@@ -18,119 +41,117 @@ def get_connection():
         sslmode='require'
     )
 
-try:
+# --- 3. Load Data (With Dynamic Custom Range) ---
+# We use st.cache_data but include start/end dates in the cache key
+# so it refreshes if the user changes the dates.
+@st.cache_data(ttl=600)
+def load_data(start_d, end_d):
     conn = get_connection()
+    
+    # We inject the python dates into the SQL parameters
+    query = """
+        WITH latest_data AS (
+            SELECT DISTINCT ON (item_number)
+                item_number, price, title, image_url
+            FROM sales_raw
+            ORDER BY item_number, sold_date DESC
+        ),
+        sales_counts AS (
+            SELECT 
+                item_number,
+                
+                -- Standard Metrics
+                SUM(CASE WHEN sold_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 ELSE 0 END) AS sold_last_7_days,
+                SUM(CASE WHEN sold_date >= CURRENT_DATE - INTERVAL '14 days' THEN 1 ELSE 0 END) AS sold_last_14_days,
+                SUM(CASE WHEN sold_date >= CURRENT_DATE - INTERVAL '21 days' THEN 1 ELSE 0 END) AS sold_last_21_days,
+                SUM(CASE WHEN sold_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 ELSE 0 END) AS sold_last_30_days,
+                COUNT(*) AS total_sold_all_time,
+
+                -- CUSTOM RANGE COLUMN (Dynamic)
+                SUM(CASE 
+                    WHEN sold_date >= %s AND sold_date <= %s THEN 1 
+                    ELSE 0 
+                END) AS sold_custom_range
+
+            FROM sales_raw
+            GROUP BY item_number
+        )
+        SELECT 
+            l.image_url, l.title, l.price AS current_price,
+            s.sold_last_7_days, s.sold_last_14_days, s.sold_last_21_days, 
+            s.sold_last_30_days, s.total_sold_all_time, s.sold_custom_range,
+            l.item_number
+        FROM sales_counts s
+        JOIN latest_data l ON s.item_number = l.item_number
+        ORDER BY s.sold_last_7_days DESC, l.item_number ASC;
+    """
+    
+    # Pass dates as a tuple to avoid SQL Injection
+    return pd.read_sql(query, conn, params=(start_d, end_d))
+
+try:
+    with st.spinner("Fetching Data..."):
+        df = load_data(start_date, end_date)
 except Exception as e:
-    st.error(f"Database Connection Failed: {e}")
+    st.error(f"Error: {e}")
     st.stop()
 
-# --- Load Data from View ---
-# We just grab the view directly. No complex joins needed anymore.
-query = """
-    WITH latest_data AS (
-    -- 1. Get the most recent Price, Title, and Image for each item
-    -- DISTINCT ON ensures we grab exactly one row (the latest one) per item
-    SELECT DISTINCT ON (item_number)
-        item_number,
-        price,
-        title,
-        image_url
-    FROM sales_raw
-    ORDER BY item_number, sold_date DESC
-),
-
-sales_counts AS (
-    -- 2. Calculate the Sales Counts (aggregating all history)
-    SELECT 
-        item_number,
-        
-        -- 7 Days
-        SUM(CASE 
-            WHEN sold_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 
-            ELSE 0 
-        END) AS sold_last_7_days,
-
-        -- 14 Days
-        SUM(CASE 
-            WHEN sold_date >= CURRENT_DATE - INTERVAL '14 days' THEN 1 
-            ELSE 0 
-        END) AS sold_last_14_days,
-
-        -- 21 Days
-        SUM(CASE 
-            WHEN sold_date >= CURRENT_DATE - INTERVAL '21 days' THEN 1 
-            ELSE 0 
-        END) AS sold_last_21_days,
-
-        -- 30 Days
-        SUM(CASE 
-            WHEN sold_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 
-            ELSE 0 
-        END) AS sold_last_30_days,
-
-        -- Total
-        COUNT(*) AS total_sold_all_time
-
-    FROM sales_raw
-    GROUP BY item_number
-)
-
--- 3. Join them together for the final result
-SELECT 
-    l.image_url,
-    l.title,
-    l.price AS current_price, -- This is now strictly the LATEST price
-    s.sold_last_7_days,
-    s.sold_last_14_days,
-    s.sold_last_21_days,
-    s.sold_last_30_days,
-    s.total_sold_all_time,
-    l.item_number,
-    
-    -- Window Functions for Grand Totals
-    SUM(s.total_sold_all_time) OVER() AS grand_total_sold,
-    SUM(s.sold_last_7_days) OVER() AS grand_total_sold_7_days,
-    SUM(s.sold_last_14_days) OVER() AS grand_total_sold_14_days,
-    SUM(s.sold_last_21_days) OVER() AS grand_total_sold_21_days,
-    SUM(s.sold_last_30_days) OVER() AS grand_total_sold_30_days
-
-FROM sales_counts s
-JOIN latest_data l ON s.item_number = l.item_number
-ORDER BY s.sold_last_7_days DESC, l.item_number ASC;
-"""
-
-# Run query
-with st.spinner("Fetching Dashboard View..."):
-    df = pd.read_sql(query, conn)
-
-# --- Display The View ---
+# --- 4. Apply Filters ---
 if not df.empty:
     
-    # Optional: Simple Search Bar
-    search = st.text_input("🔍 Search Product", "")
-    if search:
-        df = df[df['title'].str.contains(search, case=False, na=False)]
+    # Apply the numeric filters from the sidebar
+    df_filtered = df[
+        (df['sold_last_7_days'] >= min_7) &
+        (df['sold_last_14_days'] >= min_14) &
+        (df['sold_last_21_days'] >= min_21) &  # Assuming you want to filter 21 days as well
+        (df['sold_last_30_days'] >= min_30) &
+        (df['sold_custom_range'] >= min_custom) &
+        (df['total_sold_all_time'] >= min_total)
+    ]
 
-    # The Main Table
+    # Optional: Text Search
+    search = st.text_input("🔍 Search Product by Title", "")
+    if search:
+        df_filtered = df_filtered[df_filtered['title'].str.contains(search, case=False, na=False)]
+
+    # --- 5. Display Table ---
+    # We dynamically label the Custom Column based on user selection
+    custom_col_label = f"Sales ({start_date.strftime('%b %d')} - {end_date.strftime('%b %d')})"
+
+    st.markdown(f"### Showing {len(df_filtered)} items")
+    
     st.dataframe(
-        df,
+        df_filtered,
         column_config={
             "image_url": st.column_config.ImageColumn("Image", width="small"),
             "title": st.column_config.TextColumn("Product Name", width="medium"),
             "current_price": st.column_config.NumberColumn("Price", format="$%.2f"),
             
-            # The Columns you specifically asked for
-            "sold_last_7_days": st.column_config.NumberColumn("7 Days", format="%d 📦"),
+            # Standard Columns
+            "sold_last_7_days": st.column_config.NumberColumn("7 Days", format="%d"),
             "sold_last_14_days": st.column_config.NumberColumn("14 Days", format="%d"),
             "sold_last_21_days": st.column_config.NumberColumn("21 Days", format="%d"),
             "sold_last_30_days": st.column_config.NumberColumn("30 Days", format="%d"),
-            "total_sold_all_time": st.column_config.NumberColumn("Total Sold", format="%d"),
             
+            # NEW Custom Column (Highlighted)
+            "sold_custom_range": st.column_config.NumberColumn(
+                custom_col_label, 
+                help=f"Sales between {start_date} and {end_date}",
+                format="%d ⭐" # Star icon to highlight it's special
+            ),
+            
+            "total_sold_all_time": st.column_config.NumberColumn("Total Sold", format="%d"),
             "item_number": st.column_config.TextColumn("Item ID"),
         },
+        column_order=[
+            "image_url", "title", "current_price", 
+            "sold_custom_range", # Put custom range first for visibility
+            "sold_last_7_days", "sold_last_14_days","sold_last_21_days", "sold_last_30_days", 
+            "total_sold_all_time", "item_number"
+        ],
         use_container_width=True,
         hide_index=True,
         height=900 
     )
 else:
-    st.warning("No data found in the view.")
+    st.warning("No data found.")
