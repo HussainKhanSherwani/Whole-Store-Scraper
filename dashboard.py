@@ -10,7 +10,6 @@ st.title("📦 eBay Sold Items Dashboard")
 # --- 1. Sidebar Controls (Date Range & Filters) ---
 with st.sidebar:
     st.header("📅 Custom Date Range")
-    # Default to last 3 days
     default_start = date.today() - timedelta(days=3)
     default_end = date.today()
     
@@ -20,8 +19,6 @@ with st.sidebar:
     st.divider()
     st.header("🔍 Sales Filters (Min Sold)")
     
-    # We create placeholders for sliders. We will update their max values 
-    # dynamically after we load the data.
     min_7   = st.number_input("Min Sales (7 Days)", min_value=0, value=0)
     min_14  = st.number_input("Min Sales (14 Days)", min_value=0, value=0)
     min_21  = st.number_input("Min Sales (21 Days)", min_value=0, value=0)
@@ -41,18 +38,15 @@ def get_connection():
         sslmode='require'
     )
 
-# --- 3. Load Data (With Dynamic Custom Range) ---
-# We use st.cache_data but include start/end dates in the cache key
-# so it refreshes if the user changes the dates.
+# --- 3. Load Data ---
 @st.cache_data(ttl=600)
 def load_data(start_d, end_d):
     conn = get_connection()
     
-    # We inject the python dates into the SQL parameters
     query = """
         WITH latest_data AS (
             SELECT DISTINCT ON (item_number)
-                item_number, price, title, image_url
+                item_number, price, title, image_url, product_url -- ADDED product_url HERE
             FROM sales_raw
             ORDER BY item_number, sold_date DESC
         ),
@@ -67,7 +61,7 @@ def load_data(start_d, end_d):
                 SUM(CASE WHEN sold_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 ELSE 0 END) AS sold_last_30_days,
                 COUNT(*) AS total_sold_all_time,
 
-                -- CUSTOM RANGE COLUMN (Dynamic)
+                -- CUSTOM RANGE COLUMN
                 SUM(CASE 
                     WHEN sold_date >= %s AND sold_date <= %s THEN 1 
                     ELSE 0 
@@ -77,7 +71,7 @@ def load_data(start_d, end_d):
             GROUP BY item_number
         )
         SELECT 
-            l.image_url, l.title, l.price AS current_price,
+            l.image_url, l.title, l.price AS current_price, l.product_url, -- ADDED product_url HERE
             s.sold_last_7_days, s.sold_last_14_days, s.sold_last_21_days, 
             s.sold_last_30_days, s.total_sold_all_time, s.sold_custom_range,
             l.item_number
@@ -86,7 +80,6 @@ def load_data(start_d, end_d):
         ORDER BY s.sold_last_7_days DESC, l.item_number ASC;
     """
     
-    # Pass dates as a tuple to avoid SQL Injection
     return pd.read_sql(query, conn, params=(start_d, end_d))
 
 try:
@@ -99,54 +92,54 @@ except Exception as e:
 # --- 4. Apply Filters ---
 if not df.empty:
     
-    # Apply the numeric filters from the sidebar
     df_filtered = df[
         (df['sold_last_7_days'] >= min_7) &
         (df['sold_last_14_days'] >= min_14) &
-        (df['sold_last_21_days'] >= min_21) &  # Assuming you want to filter 21 days as well
+        (df['sold_last_21_days'] >= min_21) &
         (df['sold_last_30_days'] >= min_30) &
         (df['sold_custom_range'] >= min_custom) &
         (df['total_sold_all_time'] >= min_total)
     ]
 
-    # Optional: Text Search
     search = st.text_input("🔍 Search Product by Title", "")
     if search:
         df_filtered = df_filtered[df_filtered['title'].str.contains(search, case=False, na=False)]
 
     # --- 5. Display Table ---
-    # We dynamically label the Custom Column based on user selection
     custom_col_label = f"Sales ({start_date.strftime('%b %d')} - {end_date.strftime('%b %d')})"
-
     st.markdown(f"### Showing {len(df_filtered)} items")
     
     st.dataframe(
         df_filtered,
         column_config={
             "image_url": st.column_config.ImageColumn("Image", width="small"),
+            
+            # --- NEW LINK COLUMN CONFIGURATION ---
+            "product_url": st.column_config.LinkColumn(
+                "Link", 
+                display_text="Open 🔗"  # This text appears instead of the long URL
+            ),
+            # -------------------------------------
+
             "title": st.column_config.TextColumn("Product Name", width="medium"),
             "current_price": st.column_config.NumberColumn("Price", format="$%.2f"),
-            
-            # Standard Columns
             "sold_last_7_days": st.column_config.NumberColumn("7 Days", format="%d"),
             "sold_last_14_days": st.column_config.NumberColumn("14 Days", format="%d"),
             "sold_last_21_days": st.column_config.NumberColumn("21 Days", format="%d"),
             "sold_last_30_days": st.column_config.NumberColumn("30 Days", format="%d"),
             
-            # NEW Custom Column (Highlighted)
             "sold_custom_range": st.column_config.NumberColumn(
                 custom_col_label, 
                 help=f"Sales between {start_date} and {end_date}",
-                format="%d ⭐" # Star icon to highlight it's special
+                format="%d ⭐"
             ),
-            
             "total_sold_all_time": st.column_config.NumberColumn("Total Sold", format="%d"),
             "item_number": st.column_config.TextColumn("Item ID"),
         },
         column_order=[
-            "image_url", "title", "current_price", 
-            "sold_custom_range", # Put custom range first for visibility
-            "sold_last_7_days", "sold_last_14_days","sold_last_21_days", "sold_last_30_days", 
+            "image_url", "product_url", "title", "current_price",  # Added product_url here
+            "sold_custom_range",
+            "sold_last_7_days", "sold_last_14_days", "sold_last_21_days", "sold_last_30_days", 
             "total_sold_all_time", "item_number"
         ],
         use_container_width=True,
